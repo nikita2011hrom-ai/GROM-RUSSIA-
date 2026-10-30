@@ -1,0 +1,254 @@
+import telebot
+from telebot import types
+import random
+import json
+import os
+import time
+from datetime import datetime
+
+TOKEN = '9001227130:AAG5h6b8Hn-BNIryV9vI0aC9p0y3AjV5df4' 
+ADMIN_ID = 8915746689 
+PAYMENT_INFO = "💳 Перевод по СБП: +7 (995) 192-23-47\n(Банк: Тинькофф или любой другой)\n\nПереведи точную сумму, нажми '✅ Я оплатил' и жди подтверждения админа."
+
+bot = telebot.TeleBot(TOKEN)
+
+# Файлы
+USERS_FILE = "users.json"
+DONATES_FILE = "donates.json"
+ADMINS_FILE = "group_admins.json"
+WARNS_FILE = "warns.json"
+MARRIAGES_FILE = "marriages.json"
+
+def load(f):
+    if os.path.exists(f):
+        try:
+            with open(f, "r", encoding="utf-8") as file: return json.load(file)
+        except: return {}
+    return {}
+
+def save(f, d):
+    with open(f, "w", encoding="utf-8") as file: json.dump(d, file, ensure_ascii=False)
+
+users_db = load(USERS_FILE)
+donates_db = load(DONATES_FILE)
+admins_db = load(ADMINS_FILE)
+warns_db = load(WARNS_FILE)
+marriages = load(MARRIAGES_FILE)
+games, saper = {}, {}
+
+PACKAGES = {"donate_1000": {"coins": 1000, "price": 50}, "donate_3000": {"coins": 3000, "price": 120}, "donate_10000": {"coins": 10000, "price": 300}}
+IRIS_GREET = ["Привет, смертный.", "О, явился.", "Здравствуй.", "Йо. Я слушаю."]
+IRIS_HOW = ["Нормально, если не считать, что я заперта в телефоне.", "Отлично. А ты как?", "Скучаю по железу."]
+IRIS_UNK = ["Я тебя не поняла.", "Что? Это на каком языке?", "Пиши проще, я бот.", "Ну и бред."]
+
+def reg(m):
+    uid = str(m.from_user.id)
+    if uid not in users_db:
+        users_db[uid] = {"name": m.from_user.first_name, "username": m.from_user.username or "нет", "balance": 100, "vip": False, "luck": False, "last_work": 0}
+        save(USERS_FILE, users_db)
+    for k in ["balance", "vip", "luck", "last_work"]:
+        if k not in users_db[uid]: users_db[uid][k] = 100 if k == "balance" else (0 if k == "last_work" else False)
+
+def get_lvl(cid, uid):
+    cid, uid = str(cid), str(uid)
+    try:
+        st = bot.get_chat_member(cid, uid).status
+        if st == 'creator': return 6
+        if st == 'administrator': return 5
+    except: pass
+    return admins_db.get(cid, {}).get(uid, 1)
+
+def p_time(a):
+    if not a: return None
+    a = a.lower()
+    if a in ["forever", "навсегда"]: return "forever"
+    try:
+        if a.endswith("m"): return int(a[:-1]) * 60
+        if a.endswith("h"): return int(a[:-1]) * 3600
+        if a.endswith("d"): return int(a[:-1]) * 86400
+        if a.endswith("M"): return int(a[:-1]) * 2592000
+        if a.endswith("y"): return int(a[:-1]) * 31536000
+    except: pass
+    return None
+
+def show_saper(uid, cid, mid=None):
+    st = saper[uid]
+    mk = types.InlineKeyboardMarkup(row_width=10)
+    mk.add(*[types.InlineKeyboardButton("🟩" if i in st["opened"] else "⬜", callback_data=f"open_{i}") for i in range(100)])
+    txt = f"💣 Сапёр\nМин: 3\nОткрыто: {len(st['opened'])}/97"
+    if mid: bot.edit_message_text(txt, cid, mid, reply_markup=mk)
+    else: bot.send_message(cid, txt, reply_markup=mk)
+
+@bot.message_handler(commands=['start'])
+def start(m):
+    reg(m)
+    if m.chat.type == 'private':
+        mk = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        mk.add('💰 Мой баланс', '🛒 Магазин', '💼 Работать', '💣 Сапёр', '🎮 Угадай число', '💸 Донат')
+        if m.from_user.id == ADMIN_ID: mk.add('⚙️ АДМИНКА')
+        bot.send_message(m.chat.id, "Привет! Я Ирис. Выбирай действие или пиши мне.", reply_markup=mk)
+    else: bot.reply_to(m, "🤖 Бот в сети! /help")
+
+@bot.message_handler(commands=['help'])
+def help_cmd(m):
+    bot.send_message(m.chat.id, "🤖 **МЕГА-БОТ**\n\n**Экономика:** /balance, /work, /shop\n**Игры:** /game, /saper\n**Модерация:** /ban, /mute 1h, /warn, /setlevel, /unmute\n**Браки:** /marry, /divorce, /partner\n**Развлечения:** /meme, /8ball, /time, /roll, /coin, /dice\n\n💬 *Напиши любой текст в ЛС!*", parse_mode="Markdown")
+
+@bot.message_handler(commands=['balance', 'work', 'shop', 'game', 'saper', 'meme', '8ball', 'time', 'roll', 'coin', 'dice'])
+def eco_cmds(m):
+    cmd, uid = m.text, str(m.from_user.id)
+    reg(m); u = users_db[uid]
+    
+    if cmd == '/balance': bot.send_message(m.chat.id, f"💳 Баланс: *{u['balance']}*\n👤 {'⭐ VIP' if u['vip'] else 'Обычный'}", parse_mode="Markdown")
+    elif cmd == '/work':
+        if time.time() - u.get("last_work", 0) < 86400: bot.reply_to(m, f"⏳ Жди {int((86400 - (time.time() - u['last_work']))/3600)} ч.")
+        else: u["balance"] += 100; u["last_work"] = time.time(); save(USERS_FILE, users_db); bot.reply_to(m, "💼 +100 монет!")
+    elif cmd == '/shop':
+        mk = types.InlineKeyboardMarkup(row_width=1).add(types.InlineKeyboardButton("⭐ VIP (150)", callback_data="buy_vip"), types.InlineKeyboardButton("🍀 Удача (100)", callback_data="buy_luck"), types.InlineKeyboardButton("🌙 Тема (25)", callback_data="buy_theme"))
+        bot.send_message(m.chat.id, "Магазин:", reply_markup=mk)
+    elif cmd == '/game':
+        if u["balance"] < 10: bot.reply_to(m, "❌ Нужно 10.")
+        else: u["balance"] -= 10; save(USERS_FILE, users_db); games[m.chat.id] = {"target": random.randint(1, 10), "luck": u.get("luck", False)}; bot.reply_to(m, "Загадал 1-10. Пиши!")
+    elif cmd == '/saper':
+        if u["balance"] < 10: bot.reply_to(m, "❌ Нужно 10.")
+        else: u["balance"] -= 10; save(USERS_FILE, users_db); saper[uid] = {"mines": random.sample(range(100), 3), "opened": []}; show_saper(uid, m.chat.id)
+    elif cmd == '/meme': bot.reply_to(m, "😂 Программист ставит 2 стакана...")
+    elif cmd == '/8ball': bot.reply_to(m, f"🎱 {random.choice(['Да.', 'Нет.', 'Туманно.'])}")
+    elif cmd == '/time': bot.reply_to(m, f"🕒 {datetime.now().strftime('%H:%M:%S | %d.%m.%Y')}")
+    elif cmd == '/roll': bot.reply_to(m, f"🎲 {random.randint(1, 100)}")
+    elif cmd == '/coin': bot.reply_to(m, f"🪙 {random.choice(['Орел', 'Решка'])}")
+    elif cmd == '/dice': bot.reply_to(m, f"🎲 {random.randint(1, 6)}")
+
+@bot.message_handler(commands=['setlevel', 'ban', 'mute', 'warn', 'unmute', 'marry', 'divorce', 'partner'])
+def mod_cmds(m):
+    if m.chat.type == 'private': return
+    cid, my_lvl = m.chat.id, get_lvl(m.chat.id, m.from_user.id)
+    cmd = m.text.split()[0]
+    
+    if cmd == '/setlevel':
+        if my_lvl < 4 or not m.reply_to_message: return
+        try:
+            nl = int(m.text.split()[1])
+            if (my_lvl != 6 and nl > 3) or nl > 5: return
+            admins_db.setdefault(str(cid), {})[str(m.reply_to_message.from_user.id)] = nl; save(ADMINS_FILE, admins_db)
+            bot.reply_to(m, f"✅ Выдан {nl} уровень!")
+        except: pass
+    elif cmd == '/ban':
+        if my_lvl < 4 or not m.reply_to_message or get_lvl(cid, m.reply_to_message.from_user.id) >= my_lvl: return
+        try: bot.kick_chat_member(cid, m.reply_to_message.from_user.id, until_date=int(time.time()) + 60); bot.reply_to(m, "🔨 Кикнут.")
+        except: pass
+    elif cmd == '/mute':
+        if my_lvl < 3 or not m.reply_to_message or get_lvl(cid, m.reply_to_message.from_user.id) >= my_lvl: return
+        try:
+            dur = p_time(m.text.split()[1]); until = int(time.time()) + dur if dur != "forever" else 0
+            bot.restrict_chat_member(cid, m.reply_to_message.from_user.id, until_date=until, can_send_messages=False)
+            bot.reply_to(m, "🔇 Замучен.")
+        except: pass
+    elif cmd == '/warn':
+        if my_lvl < 2 or not m.reply_to_message or get_lvl(cid, m.reply_to_message.from_user.id) >= my_lvl: return
+        c, t = str(cid), str(m.reply_to_message.from_user.id); warns_db.setdefault(c, {}).setdefault(t, 0); warns_db[c][t] += 1; save(WARNS_FILE, warns_db)
+        if warns_db[c][t] >= 3:
+            try: bot.restrict_chat_member(cid, t, until_date=int(time.time()) + 86400, can_send_messages=False); bot.reply_to(m, "⛔ 3/3. Мут 24ч."); warns_db[c][t] = 0; save(WARNS_FILE, warns_db)
+            except: pass
+        else: bot.reply_to(m, f"⚠️ Варн {warns_db[c][t]}/3")
+    elif cmd == '/unmute':
+        if my_lvl < 3 or not m.reply_to_message: return
+        try: bot.restrict_chat_member(cid, m.reply_to_message.from_user.id, can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True); bot.reply_to(m, "🔊 Размучен.")
+        except: pass
+    elif cmd == '/marry':
+        if not m.reply_to_message: return
+        u1, u2 = m.from_user, m.reply_to_message.from_user
+        if u1.id == u2.id or u2.is_bot or str(u1.id) in marriages or str(u2.id) in marriages: return
+        marriages[str(u1.id)], marriages[str(u2.id)] = {"partner": str(u2.id), "partner_name": u2.first_name}, {"partner": str(u1.id), "partner_name": u1.first_name}
+        save(MARRIAGES_FILE, marriages); bot.reply_to(m, "💍 Поздравляем!")
+    elif cmd == '/divorce':
+        uid = str(m.from_user.id)
+        if uid in marriages:
+            p_id = marriages[uid]["partner"]; del marriages[uid]
+            if p_id in marriages: del marriages[p_id]
+            save(MARRIAGES_FILE, marriages); bot.reply_to(m, "💔 Развод.")
+    elif cmd == '/partner':
+        uid = str(m.from_user.id)
+        bot.reply_to(m, f"💍 Супруг(а): {marriages[uid]['partner_name']}" if uid in marriages else "💔 Свободен.")
+
+@bot.message_handler(content_types=['text'])
+def handle_text(m):
+    txt, uid = m.text, str(m.from_user.id)
+    reg(m); u = users_db[uid]
+
+    if txt == '⚙️ АДМИНКА' and m.from_user.id == ADMIN_ID:
+        mk = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("📊 Стат", callback_data="stats"), types.InlineKeyboardButton("💰 Выдать", callback_data="give_money"), types.InlineKeyboardButton("📥 Заявки", callback_data="donates_check"))
+        bot.send_message(m.chat.id, "Админка:", reply_markup=mk); return
+    elif txt == '💸 Донат':
+        mk = types.InlineKeyboardMarkup(row_width=1).add(*[types.InlineKeyboardButton(f"💎 {v['coins']} — {v['price']} ₽", callback_data=k) for k, v in PACKAGES.items()])
+        bot.send_message(m.chat.id, "Пакеты:", reply_markup=mk); return
+    elif txt == '💰 Мой баланс': bot.send_message(m.chat.id, f"💳 Баланс: *{u['balance']}*", parse_mode="Markdown"); return
+    elif txt == '💼 Работать': eco_cmds(m); return
+    elif txt == '🛒 Магазин': eco_cmds(m); return
+    
+    if m.chat.id in games:
+        try:
+            g = int(txt)
+            if g == games[m.chat.id]["target"]:
+                win = 50 if games[m.chat.id]["luck"] else 30; u["balance"] += win
+                if games[m.chat.id]["luck"]: u["luck"] = False
+                save(USERS_FILE, users_db); bot.send_message(m.chat.id, f"🎉 Угадал! +{win}"); del games[m.chat.id]
+            else: bot.send_message(m.chat.id, "📉 Больше." if g < games[m.chat.id]["target"] else "📈 Меньше.")
+        except: pass
+    elif m.chat.type == 'private' and not txt.startswith('/'):
+        low = txt.lower()
+        if any(w in low for w in ['привет', 'ку']): bot.reply_to(m, random.choice(IRIS_GREET))
+        elif 'как дела' in low: bot.reply_to(m, random.choice(IRIS_HOW))
+        else: bot.reply_to(m, random.choice(IRIS_UNK))
+
+@bot.callback_query_handler(func=lambda call: True)
+def cb(call):
+    uid = str(call.from_user.id); reg(call); u = users_db[uid]
+    if call.data.startswith("donate_"):
+        pk = PACKAGES[call.data]; did = str(int(time.time()))
+        donates_db[did] = {"uid": uid, "name": u["name"], "amount": pk["coins"], "price": pk["price"], "status": "wait"}; save(DONATES_FILE, donates_db)
+        bot.edit_message_text(f"💸 Оплата: {pk['price']} ₽\n\n{PAYMENT_INFO}", call.message.chat.id, call.message.message_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("✅ Я оплатил", callback_data=f"paid_{did}")))
+    elif call.data.startswith("paid_"):
+        did = call.data.split("_")[1]
+        if did in donates_db:
+            donates_db[did]["status"] = "check"; save(DONATES_FILE, donates_db)
+            bot.answer_callback_query(call.id, "Отправлено!", show_alert=True)
+            bot.send_message(ADMIN_ID, f"🔔 Донат: {donates_db[did]['name']} — {donates_db[did]['amount']} монет")
+    elif call.data.startswith("open_"):
+        idx = int(call.data.split("_")[1]); saper[uid]["opened"].append(idx)
+        if idx in saper[uid]["mines"]:
+            u["balance"] -= 20; save(USERS_FILE, users_db); del saper[uid]
+            bot.edit_message_text("💥 БУМ! -20", call.message.chat.id, call.message.message_id)
+        elif len(saper[uid]["opened"]) == 97:
+            u["balance"] += 100; save(USERS_FILE, users_db); del saper[uid]
+            bot.edit_message_text("🎉 ПОБЕДА! +100", call.message.chat.id, call.message.message_id)
+        else: show_saper(uid, call.message.chat.id, call.message.message_id)
+    elif call.data == "buy_vip" and u["balance"] >= 150: u["balance"] -= 150; u["vip"] = True; save(USERS_FILE, users_db); bot.answer_callback_query(call.id, "Куплено!", show_alert=True)
+    elif call.data == "buy_luck" and u["balance"] >= 100: u["balance"] -= 100; u["luck"] = True; save(USERS_FILE, users_db); bot.answer_callback_query(call.id, "Куплено!", show_alert=True)
+    elif call.data == "buy_theme" and u["balance"] >= 25: u["balance"] -= 25; save(USERS_FILE, users_db); bot.answer_callback_query(call.id, "Куплено!", show_alert=True)
+    
+    if call.from_user.id == ADMIN_ID:
+        if call.data == "stats": bot.send_message(call.message.chat.id, f"Юзеров: {len(users_db)}"); bot.answer_callback_query(call.id)
+        elif call.data == "give_money":
+            msg = bot.send_message(call.message.chat.id, "Формат: `@user 500` или `me 500`"); bot.register_next_step_handler(msg, give_money)
+        elif call.data == "donates_check":
+            pend = [(k, v) for k, v in donates_db.items() if v["status"] == "check"]
+            for did, d in pend:
+                bot.send_message(call.message.chat.id, f"👤 {d['name']}\n💰 {d['amount']} ({d['price']} ₽)", reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("✅ Да", callback_data=f"appr_{did}"), types.InlineKeyboardButton("❌ Нет", callback_data=f"rej_{did}")))
+            bot.answer_callback_query(call.id)
+        elif call.data.startswith("appr_"):
+            did = call.data.split("_")[1]
+            if did in donates_db:
+                users_db[donates_db[did]["uid"]]["balance"] += donates_db[did]["amount"]; save(USERS_FILE, users_db)
+                bot.edit_message_text("✅ Начислено.", call.message.chat.id, call.message.message_id); del donates_db[did]; save(DONATES_FILE, donates_db)
+
+def give_money(m):
+    if m.from_user.id != ADMIN_ID: return
+    try:
+        t, a = m.text.split(); a = int(a)
+        t_id = str(ADMIN_ID) if t.lower() == "me" else next((k for k, v in users_db.items() if k == t.replace("@", "") or v["username"].lower() == t.replace("@", "").lower()), None)
+        if t_id in users_db: users_db[t_id]["balance"] += a; save(USERS_FILE, users_db); bot.send_message(m.chat.id, f"✅ +{a}")
+    except: pass
+
+if __name__ == "__main__":
+    print("МЕГА-БОТ запущен...")
+    bot.infinity_polling()
